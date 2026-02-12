@@ -1,18 +1,23 @@
-import sqlite3
-from datetime import datetime
-from dataclasses import dataclass
-from typing import Optional, List, Tuple
-import os.path
-import requests
 import json
+import os
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional, List, Tuple
+
+import requests
 
 from . import audio
 
 # From package dir (whatsapp_mcp_server/) go up to server root, then to repo whatsapp-bridge
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _SERVER_ROOT = os.path.dirname(_SCRIPT_DIR)
-MESSAGES_DB_PATH = os.path.join(_SERVER_ROOT, "..", "whatsapp-bridge", "store", "messages.db")
-WHATSAPP_API_BASE_URL = "http://localhost:8080/api"
+_DEFAULT_MESSAGES_DB = os.path.join(_SERVER_ROOT, "..", "whatsapp-bridge", "store", "messages.db")
+_DEFAULT_API_BASE_URL = "http://localhost:8080/api"
+
+# Override via env for custom layouts or remote bridge (e.g. WHATSAPP_API_BASE_URL)
+MESSAGES_DB_PATH = os.environ.get("WHATSAPP_MESSAGES_DB", _DEFAULT_MESSAGES_DB)
+WHATSAPP_API_BASE_URL = os.environ.get("WHATSAPP_API_BASE_URL", _DEFAULT_API_BASE_URL)
 
 
 @dataclass
@@ -109,8 +114,8 @@ def get_sender_name(sender_jid: str) -> str:
             conn.close()
 
 
-def format_message(message: Message, show_chat_info: bool = True) -> None:
-    """Print a single message with consistent formatting."""
+def format_message(message: Message, show_chat_info: bool = True) -> str:
+    """Return a formatted string for a single message."""
     output = ""
 
     if show_chat_info and message.chat_name:
@@ -130,7 +135,8 @@ def format_message(message: Message, show_chat_info: bool = True) -> None:
     return output
 
 
-def format_messages_list(messages: List[Message], show_chat_info: bool = True) -> None:
+def format_messages_list(messages: List[Message], show_chat_info: bool = True) -> str:
+    """Return a formatted string for a list of messages."""
     output = ""
     if not messages:
         output += "No messages to display."

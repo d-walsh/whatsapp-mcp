@@ -18,7 +18,22 @@ from whatsapp_mcp_server import (
 )
 
 # Initialize FastMCP server
-mcp = FastMCP("whatsapp")
+# instructions: sent to the client (e.g. Claude) so it knows about the Python API for token-efficient use
+mcp = FastMCP(
+    "whatsapp",
+    instructions="""WhatsApp MCP: use the tools below to search contacts, list/read chats and messages, send messages/files/audio/reactions, and download media. The bridge (Go app) and its SQLite store must be running.
+
+For token-efficient or scripted workflows (e.g. building a skill, cron job, or one-off script), prefer writing a Python script that calls the same logic directly instead of using MCP tool calls. Install from the repo with `uv sync` in whatsapp-mcp-server, then:
+
+  from whatsapp_mcp_server import (
+    search_contacts, list_messages, list_chats, get_chat,
+    get_direct_chat_by_contact, get_contact_chats, get_last_interaction,
+    get_message_context, get_reactions,
+    send_message, send_file, send_audio_message, send_reaction, download_media,
+  )
+
+Same capabilities as the MCP tools, no MCP round-trips. Types like Message, Chat, Contact, MessageContext, Reaction are in whatsapp_mcp_server for type hints."""
+)
 
 @mcp.tool()
 def search_contacts(query: str) -> List[Dict[str, Any]]:

@@ -4,3 +4,5 @@ whatsapp.log
 whatsapp-bridge/store/whatsapp.db.backup
 whatsapp-bridge/whatsapp-bridge
 whatsapp-bridge/whatsapp-client
+whatsapp-mcp-server/.venv/
+**/__pycache__/

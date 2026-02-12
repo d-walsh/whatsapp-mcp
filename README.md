@@ -19,9 +19,9 @@ Here's an example of what you can do when it's connected to Claude.
 ### Prerequisites
 
 - Go
-- Python 3.6+
+- Python 3.11+
 - Anthropic Claude Desktop app (or Cursor)
-- UV (Python package manager), install with `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- UV (Python package manager); install with `curl -LsSf https://astral.sh/uv/install.sh | sh` and ensure `uv` is on your PATH
 - FFmpeg (_optional_) - Only needed for audio messages. If you want to send audio files as playable WhatsApp voice messages, they must be in `.ogg` Opus format. With FFmpeg installed, the MCP server will automatically convert non-Opus audio files. Without FFmpeg, you can still send raw audio files using the `send_file` tool.
 
 ### Steps
@@ -119,6 +119,17 @@ This application consists of two main components:
 - All message history is stored in a SQLite database within the `whatsapp-bridge/store/` directory
 - The database maintains tables for chats and messages
 - Messages are indexed for efficient searching and retrieval
+
+### Environment variables (Python MCP server)
+
+You can override defaults so the MCP server works with a different DB path or bridge URL (e.g. if the bridge runs on another host or port):
+
+- **`WHATSAPP_MESSAGES_DB`** – Path to `messages.db` (default: repo layout `whatsapp-bridge/store/messages.db` relative to the server package).
+- **`WHATSAPP_API_BASE_URL`** – Bridge REST API base URL (default: `http://localhost:8080/api`). Must match the host and port where the Go bridge is running.
+
+The Go bridge reads:
+
+- **`WHATSAPP_BRIDGE_PORT`** – Port for the bridge REST API (default: `8080`). If you change this, set `WHATSAPP_API_BASE_URL` in the MCP server to the same host and port (e.g. `http://localhost:9090/api`).
 
 ## Usage
 
@@ -219,9 +230,13 @@ By default, just the metadata of the media is stored in the local database. The 
 
 ## Technical Details
 
+- The bridge REST API has **no authentication** and is intended for **localhost only**. Do not expose it to the network without additional protection (e.g. firewall, reverse proxy with auth).
+
+Data flow:
+
 1. Claude sends requests to the Python MCP server
 2. The MCP server queries the Go bridge for WhatsApp data or directly to the SQLite database
-3. The Go accesses the WhatsApp API and keeps the SQLite database up to date
+3. The Go bridge accesses the WhatsApp API and keeps the SQLite database up to date
 4. Data flows back through the chain to Claude
 5. When sending messages, the request flows from Claude through the MCP server to the Go bridge and to WhatsApp
 

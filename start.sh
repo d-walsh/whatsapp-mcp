@@ -9,4 +9,5 @@ if ! pgrep -f "whatsapp-bridge$" > /dev/null; then
 fi
 
 # Start the MCP server (this stays in foreground for stdio)
-cd "$MCP_DIR" && /Users/david/.local/bin/uv run main.py
+# Ensure uv is on PATH (see README Prerequisites)
+cd "$MCP_DIR" && uv run main.py
