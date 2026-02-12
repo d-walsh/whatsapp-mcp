@@ -238,6 +238,15 @@ By default, just the metadata of the media is stored in the local database. The 
 make gitleaks
 ```
 
+To run Gitleaks automatically before each commit, install [pre-commit](https://pre-commit.com/) and enable the hook:
+
+```bash
+pip install pre-commit   # or: brew install pre-commit
+pre-commit install
+```
+
+The hook scans staged changes only. To skip it for a single commit: `SKIP=gitleaks git commit -m "..."`.
+
 ## Technical Details
 
 - The bridge REST API has **no authentication** and is intended for **localhost only**. Do not expose it to the network without additional protection (e.g. firewall, reverse proxy with auth).
