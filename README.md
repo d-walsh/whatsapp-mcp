@@ -2,7 +2,7 @@
 
 This is a Model Context Protocol (MCP) server for WhatsApp.
 
-With this you can search and read your personal Whatsapp messages (including images, videos, documents, and audio messages), search your contacts and send messages to either individuals or groups. You can also send media files including images, videos, documents, and audio messages.
+With this you can search and read your personal Whatsapp messages (including images, videos, documents, and audio messages), search your contacts and send messages to either individuals or groups. You can also send media files including images, videos, documents, and audio messages. You can read and send message reactions (e.g. thumbs up, heart).
 
 It connects to your **personal WhatsApp account** directly via the Whatsapp web multidevice API (using the [whatsmeow](https://github.com/tulir/whatsmeow) library). All your messages are stored locally in a SQLite database and only sent to an LLM (such as Claude) when the agent accesses them through tools (which you control).
 
@@ -162,7 +162,7 @@ print(messages)
 ok, msg = send_message("1234567890", "Hello from Python")
 ```
 
-All operations exposed as MCP tools are available this way: `search_contacts`, `list_messages`, `list_chats`, `get_chat`, `get_direct_chat_by_contact`, `get_contact_chats`, `get_last_interaction`, `get_message_context`, `send_message`, `send_file`, `send_audio_message`, `download_media`. Types like `Message`, `Chat`, `Contact`, `MessageContext` are in `whatsapp_mcp_server` for type hints. Use this for token-heavy or fully automated workflows without an AI in the middle.
+All operations exposed as MCP tools are available this way: `search_contacts`, `list_messages`, `list_chats`, `get_chat`, `get_direct_chat_by_contact`, `get_contact_chats`, `get_last_interaction`, `get_message_context`, `get_reactions`, `send_message`, `send_file`, `send_audio_message`, `send_reaction`, `download_media`. Types like `Message`, `Chat`, `Contact`, `MessageContext`, `Reaction` are in `whatsapp_mcp_server` for type hints. Use this for token-heavy or fully automated workflows without an AI in the middle.
 
 ### MCP Tools
 
@@ -176,10 +176,28 @@ Claude can access the following tools to interact with WhatsApp:
 - **get_contact_chats**: List all chats involving a specific contact
 - **get_last_interaction**: Get the most recent message with a contact
 - **get_message_context**: Retrieve context around a specific message
-- **send_message**: Send a WhatsApp message to a specified phone number or group JID
-- **send_file**: Send a file (image, video, raw audio, document) to a specified recipient
-- **send_audio_message**: Send an audio file as a WhatsApp voice message (requires the file to be an .ogg opus file or ffmpeg must be installed)
+- **get_reactions**: Get all reactions (e.g. thumbs up, heart) on a message; returns reactor, emoji, and timestamp for each.
+- **send_message**: Send a WhatsApp message to a specified phone number or group JID. Optional **reply_to_message_id** and **reply_to_sender_jid** send the message as a quote reply to a specific message.
+- **send_reaction**: Send a reaction (emoji) to a message, or remove your reaction. For groups, pass **reply_to_sender_jid** (the sender of the message you're reacting to).
+- **send_file**: Send a file (image, video, raw audio, document) to a specified recipient. Supports optional reply parameters.
+- **send_audio_message**: Send an audio file as a WhatsApp voice message (requires the file to be an .ogg opus file or ffmpeg must be installed). Supports optional reply parameters.
 - **download_media**: Download media from a WhatsApp message and get the local file path
+
+### Reactions
+
+You can read and send message reactions (e.g. 👍 ❤️ 😂):
+
+- **get_reactions**: Pass `message_id` and `chat_jid` (from a message in `list_messages` or `get_message_context`) to get all reactions on that message. Returns a list of `reactor_sender`, `reaction_text` (emoji), and `timestamp`.
+- **send_reaction**: Pass `chat_jid`, `message_id`, and `reaction` (emoji string, e.g. `"👍"` or `"❤️"`). Use empty string `""` to remove your reaction. For **group chats**, also pass `reply_to_sender_jid` (the `sender` of the message you're reacting to).
+
+### Replying to a message
+
+You can send a message as a **quote reply** to a specific message. When calling `send_message`, `send_file`, or `send_audio_message`, pass:
+
+- **reply_to_message_id**: The `id` of the message you're replying to (from `list_messages` or `get_message_context`).
+- **reply_to_sender_jid**: The `sender` JID of that message (so the quote shows the correct author; for groups this is the participant who sent the message).
+
+Example: after getting a message from `list_messages`, use `message.id` and `message.sender` as the reply parameters.
 
 ### Media Handling Features
 

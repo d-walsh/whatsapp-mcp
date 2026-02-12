@@ -56,6 +56,14 @@ class MessageContext:
     after: List[Message]
 
 
+@dataclass
+class Reaction:
+    """A reaction (e.g. thumbs up, heart) on a message."""
+    reactor_sender: str
+    reaction_text: str
+    timestamp: datetime
+
+
 def get_sender_name(sender_jid: str) -> str:
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
@@ -635,7 +643,21 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
             conn.close()
 
 
-def send_message(recipient: str, message: str) -> Tuple[bool, str]:
+def send_message(
+    recipient: str,
+    message: str,
+    reply_to_message_id: Optional[str] = None,
+    reply_to_sender_jid: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Send a text message. Optionally reply to a specific message (quote reply).
+
+    Args:
+        recipient: Phone number or JID of the recipient.
+        message: Text to send.
+        reply_to_message_id: If set, the message will be sent as a reply to this message ID.
+        reply_to_sender_jid: JID of the sender of the message you're replying to (message.sender).
+            Required for correct quote display; use the 'sender' field from the Message you're replying to.
+    """
     try:
         if not recipient:
             return False, "Recipient must be provided"
@@ -645,6 +667,10 @@ def send_message(recipient: str, message: str) -> Tuple[bool, str]:
             "recipient": recipient,
             "message": message,
         }
+        if reply_to_message_id:
+            payload["reply_to_message_id"] = reply_to_message_id
+        if reply_to_sender_jid:
+            payload["reply_to_sender_jid"] = reply_to_sender_jid
 
         response = requests.post(url, json=payload)
 
@@ -662,7 +688,13 @@ def send_message(recipient: str, message: str) -> Tuple[bool, str]:
         return False, f"Unexpected error: {str(e)}"
 
 
-def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
+def send_file(
+    recipient: str,
+    media_path: str,
+    reply_to_message_id: Optional[str] = None,
+    reply_to_sender_jid: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Send a file (image, video, document, etc.). Optionally as a reply to a message."""
     try:
         if not recipient:
             return False, "Recipient must be provided"
@@ -676,8 +708,12 @@ def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
         url = f"{WHATSAPP_API_BASE_URL}/send"
         payload = {
             "recipient": recipient,
-            "media_path": media_path
+            "media_path": media_path,
         }
+        if reply_to_message_id:
+            payload["reply_to_message_id"] = reply_to_message_id
+        if reply_to_sender_jid:
+            payload["reply_to_sender_jid"] = reply_to_sender_jid
 
         response = requests.post(url, json=payload)
 
@@ -695,7 +731,13 @@ def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
         return False, f"Unexpected error: {str(e)}"
 
 
-def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
+def send_audio_message(
+    recipient: str,
+    media_path: str,
+    reply_to_message_id: Optional[str] = None,
+    reply_to_sender_jid: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Send an audio file as a voice message. Optionally as a reply to a message."""
     try:
         if not recipient:
             return False, "Recipient must be provided"
@@ -715,8 +757,12 @@ def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
         url = f"{WHATSAPP_API_BASE_URL}/send"
         payload = {
             "recipient": recipient,
-            "media_path": media_path
+            "media_path": media_path,
         }
+        if reply_to_message_id:
+            payload["reply_to_message_id"] = reply_to_message_id
+        if reply_to_sender_jid:
+            payload["reply_to_sender_jid"] = reply_to_sender_jid
 
         response = requests.post(url, json=payload)
 
@@ -725,6 +771,103 @@ def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
             return result.get("success", False), result.get("message", "Unknown response")
         else:
             return False, f"Error: HTTP {response.status_code} - {response.text}"
+
+    except requests.RequestException as e:
+        return False, f"Request error: {str(e)}"
+    except json.JSONDecodeError:
+        return False, f"Error parsing response: {response.text}"
+    except Exception as e:
+        return False, f"Unexpected error: {str(e)}"
+
+
+def get_reactions(message_id: str, chat_jid: str) -> List[Reaction]:
+    """Get all reactions on a message.
+
+    Args:
+        message_id: The ID of the message.
+        chat_jid: The JID of the chat containing the message.
+
+    Returns:
+        List of Reaction objects (reactor_sender, reaction_text, timestamp).
+        Empty list if the message has no reactions or on error.
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT reactor_sender, reaction_text, timestamp
+            FROM reactions
+            WHERE target_message_id = ? AND target_chat_jid = ?
+            ORDER BY timestamp ASC
+        """, (message_id, chat_jid))
+        rows = cursor.fetchall()
+        result = []
+        for row in rows:
+            ts = row["timestamp"]
+            if isinstance(ts, datetime):
+                timestamp = ts
+            elif isinstance(ts, str):
+                timestamp = datetime.fromisoformat(ts)
+            else:
+                continue
+            result.append(Reaction(
+                reactor_sender=row["reactor_sender"],
+                reaction_text=row["reaction_text"],
+                timestamp=timestamp,
+            ))
+        return result
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e).lower():
+            return []
+        print(f"Database error while getting reactions: {e}")
+        return []
+    except sqlite3.Error as e:
+        print(f"Database error while getting reactions: {e}")
+        return []
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def send_reaction(
+    chat_jid: str,
+    message_id: str,
+    reaction: str,
+    reply_to_sender_jid: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Send a reaction (emoji) to a message, or remove your reaction.
+
+    Args:
+        chat_jid: The JID of the chat (e.g. 1234567890@s.whatsapp.net or group JID).
+        message_id: The ID of the message to react to (use the 'id' field from the message).
+        reaction: The emoji to send (e.g. "👍", "❤️", "😂"). Use empty string "" to remove your reaction.
+        reply_to_sender_jid: For group chats, the JID of the user who sent the message you're reacting to.
+            For 1:1 chats, omit this.
+
+    Returns:
+        Tuple of (success, message).
+    """
+    try:
+        if not chat_jid or not message_id:
+            return False, "chat_jid and message_id are required"
+
+        url = f"{WHATSAPP_API_BASE_URL}/react"
+        payload = {
+            "chat_jid": chat_jid,
+            "message_id": message_id,
+            "reaction": reaction,
+        }
+        if reply_to_sender_jid:
+            payload["reply_to_sender_jid"] = reply_to_sender_jid
+
+        response = requests.post(url, json=payload)
+
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("success", False), result.get("message", "Unknown response")
+        return False, f"Error: HTTP {response.status_code} - {response.text}"
 
     except requests.RequestException as e:
         return False, f"Request error: {str(e)}"
