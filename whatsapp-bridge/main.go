@@ -645,10 +645,66 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		MediaType:     waMediaType,
 	}
 
-	// Download the media using whatsmeow client
-	mediaData, err := client.Download(context.Background(), downloader)
+	// Download the media using whatsmeow client with 30s timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	mediaData, err := client.Download(ctx, downloader)
 	if err != nil {
-		return false, "", "", "", fmt.Errorf("failed to download media: %v", err)
+		// If download fails (e.g., 403 from stale CDN URL), retry with empty URL
+		// to force whatsmeow to use DirectPath for a fresh URL from WhatsApp servers
+		fmt.Printf("Initial download failed (%v), retrying with DirectPath refresh...\n", err)
+		fmt.Printf("Original URL: %s\n", url)
+		fmt.Printf("DirectPath: %s\n", directPath)
+
+		retryDownloader := &MediaDownloader{
+			URL:           "", // Empty URL forces DirectPath refresh
+			DirectPath:    directPath,
+			MediaKey:      mediaKey,
+			FileLength:    fileLength,
+			FileSHA256:    fileSHA256,
+			FileEncSHA256: fileEncSHA256,
+			MediaType:     waMediaType,
+		}
+
+		retryCtx, retryCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer retryCancel()
+
+		mediaData, err = client.Download(retryCtx, retryDownloader)
+		if err != nil {
+			fmt.Printf("Retry also failed: %v\n", err)
+
+			// If still failing, try sending a media retry receipt to request re-upload
+			fmt.Printf("Attempting to request media re-upload from sender...\n")
+
+			// Parse the chat JID
+			chatJIDParsed, parseErr := types.ParseJID(chatJID)
+			if parseErr != nil {
+				fmt.Printf("Failed to parse chat JID: %v\n", parseErr)
+				return false, "", "", "", fmt.Errorf("failed to download media after retry: %v", err)
+			}
+
+			// Create minimal MessageInfo for the retry receipt
+			msgInfo := &types.MessageInfo{
+				MessageSource: types.MessageSource{
+					Chat:   chatJIDParsed,
+					Sender: chatJIDParsed, // For 1:1 chats, sender is the same as chat
+					IsFromMe: false,
+				},
+				ID: types.MessageID(messageID),
+			}
+
+			retryReceiptErr := client.SendMediaRetryReceipt(context.Background(), msgInfo, mediaKey)
+			if retryReceiptErr != nil {
+				fmt.Printf("Failed to send media retry receipt: %v\n", retryReceiptErr)
+			} else {
+				fmt.Printf("Media retry receipt sent successfully. Sender should re-upload the media.\n")
+				return false, "", "", "", fmt.Errorf("media not available - retry receipt sent to request re-upload: %v", err)
+			}
+
+			return false, "", "", "", fmt.Errorf("failed to download media after retry: %v", err)
+		}
+		fmt.Printf("Retry succeeded using DirectPath refresh\n")
 	}
 
 	// Save the downloaded media to file

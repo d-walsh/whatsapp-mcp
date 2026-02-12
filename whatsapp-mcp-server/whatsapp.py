@@ -724,15 +724,15 @@ def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
 
-def download_media(message_id: str, chat_jid: str) -> Optional[str]:
-    """Download media from a message and return the local file path.
-    
+def download_media(message_id: str, chat_jid: str) -> tuple[Optional[str], Optional[str]]:
+    """Download media from a message and return the local file path and error message.
+
     Args:
         message_id: The ID of the message containing the media
         chat_jid: The JID of the chat containing the message
-    
+
     Returns:
-        The local file path if download was successful, None otherwise
+        Tuple of (file_path, error_message). file_path is None on error, error_message is None on success.
     """
     try:
         url = f"{WHATSAPP_API_BASE_URL}/download"
@@ -740,28 +740,34 @@ def download_media(message_id: str, chat_jid: str) -> Optional[str]:
             "message_id": message_id,
             "chat_jid": chat_jid
         }
-        
+
         response = requests.post(url, json=payload)
-        
+
         if response.status_code == 200:
             result = response.json()
             if result.get("success", False):
                 path = result.get("path")
                 print(f"Media downloaded successfully: {path}")
-                return path
+                return (path, None)
             else:
-                print(f"Download failed: {result.get('message', 'Unknown error')}")
-                return None
+                error_msg = result.get('message', 'Unknown error')
+                print(f"Download failed: {error_msg}")
+                return (None, error_msg)
         else:
-            print(f"Error: HTTP {response.status_code} - {response.text}")
-            return None
-            
+            error_msg = f"HTTP {response.status_code}: {response.text}"
+            print(f"Error: {error_msg}")
+            return (None, error_msg)
+
     except requests.RequestException as e:
-        print(f"Request error: {str(e)}")
-        return None
+        error_msg = f"Request error: {str(e)}"
+        print(error_msg)
+        return (None, error_msg)
     except json.JSONDecodeError:
-        print(f"Error parsing response: {response.text}")
-        return None
+        error_msg = f"Error parsing response: {response.text}"
+        print(error_msg)
+        return (None, error_msg)
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")
+        error_msg = f"Unexpected error: {str(e)}"
+        print(error_msg)
+        return (None, error_msg)
         return None
