@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
-from whatsapp import (
+from whatsapp_mcp_server import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
     list_chats as whatsapp_list_chats,
@@ -12,7 +12,7 @@ from whatsapp import (
     send_message as whatsapp_send_message,
     send_file as whatsapp_send_file,
     send_audio_message as whatsapp_audio_voice_message,
-    download_media as whatsapp_download_media
+    download_media as whatsapp_download_media,
 )
 
 # Initialize FastMCP server

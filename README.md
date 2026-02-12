@@ -124,6 +124,46 @@ This application consists of two main components:
 
 Once connected, you can interact with your WhatsApp contacts through Claude, leveraging Claude's AI capabilities in your WhatsApp conversations.
 
+### Using as a Python library (no AI / no MCP)
+
+You can use the WhatsApp logic directly from Python (e.g. scripts, Codex/Claude Code skills, cron jobs) without running the MCP server or any LLM. The WhatsApp bridge (Go app) and its SQLite store must still be running; the library talks to the same bridge and database.
+
+Install the server package in editable mode from the repo (from the `whatsapp-mcp` root):
+
+```bash
+cd whatsapp-mcp/whatsapp-mcp-server
+uv sync
+```
+
+Then in your script or skill helper:
+
+```python
+from whatsapp_mcp_server import (
+    search_contacts,
+    list_messages,
+    list_chats,
+    get_chat,
+    send_message,
+    send_file,
+    download_media,
+)
+
+# Search contacts and list chats (no MCP, no tokens)
+contacts = search_contacts("alice")
+chats = list_chats(limit=10)
+for c in chats:
+    print(c.name, c.jid)
+
+# Read messages in a chat (returns formatted string)
+messages = list_messages(chat_jid=chats[0].jid, limit=5)
+print(messages)
+
+# Send a message
+ok, msg = send_message("1234567890", "Hello from Python")
+```
+
+All operations exposed as MCP tools are available this way: `search_contacts`, `list_messages`, `list_chats`, `get_chat`, `get_direct_chat_by_contact`, `get_contact_chats`, `get_last_interaction`, `get_message_context`, `send_message`, `send_file`, `send_audio_message`, `download_media`. Types like `Message`, `Chat`, `Contact`, `MessageContext` are in `whatsapp_mcp_server` for type hints. Use this for token-heavy or fully automated workflows without an AI in the middle.
+
 ### MCP Tools
 
 Claude can access the following tools to interact with WhatsApp:
