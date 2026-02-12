@@ -1,4 +1,4 @@
-.PHONY: run-bridge run-server install-server test
+.PHONY: run-bridge run-server install-server test gitleaks
 
 run-bridge:
 	cd whatsapp-bridge && go run main.go
@@ -11,3 +11,6 @@ install-server:
 
 test:
 	cd whatsapp-mcp-server && uv sync --extra dev && uv run pytest tests/ -v
+
+gitleaks:
+	gitleaks detect --no-banner

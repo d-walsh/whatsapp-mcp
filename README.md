@@ -228,6 +228,16 @@ You can send various media types to your WhatsApp contacts:
 
 By default, just the metadata of the media is stored in the local database. The message will indicate that media was sent. To access this media you need to use the download_media tool which takes the `message_id` and `chat_jid` (which are shown when printing messages containing the meda), this downloads the media and then returns the file path which can be then opened or passed to another tool.
 
+## Development
+
+### Secret scanning (Gitleaks)
+
+[Gitleaks](https://github.com/gitleaks/gitleaks) runs in GitHub Actions on push and pull requests to `main`/`master`. To scan locally, install Gitleaks (e.g. `brew install gitleaks`) and run:
+
+```bash
+make gitleaks
+```
+
 ## Technical Details
 
 - The bridge REST API has **no authentication** and is intended for **localhost only**. Do not expose it to the network without additional protection (e.g. firewall, reverse proxy with auth).
