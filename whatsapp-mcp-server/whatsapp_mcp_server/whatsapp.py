@@ -13,7 +13,7 @@ from . import audio
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _SERVER_ROOT = os.path.dirname(_SCRIPT_DIR)
 _DEFAULT_MESSAGES_DB = os.path.join(_SERVER_ROOT, "..", "whatsapp-bridge", "store", "messages.db")
-_DEFAULT_API_BASE_URL = "http://localhost:8080/api"
+_DEFAULT_API_BASE_URL = "http://localhost:8081/api"
 
 # Override via env for custom layouts or remote bridge (e.g. WHATSAPP_API_BASE_URL)
 MESSAGES_DB_PATH = os.environ.get("WHATSAPP_MESSAGES_DB", _DEFAULT_MESSAGES_DB)

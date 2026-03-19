@@ -503,27 +503,28 @@ func sendReaction(client *whatsmeow.Client, chatJID, messageID, reaction, replyT
 	return true, fmt.Sprintf("Reaction %s sent", reaction)
 }
 
-// Extract media info from a message
-func extractMediaInfo(msg *waProto.Message) (mediaType string, filename string, url string, mediaKey []byte, fileSHA256 []byte, fileEncSHA256 []byte, fileLength uint64) {
+// Extract media info from a message. messageID ensures unique filenames even
+// when multiple media messages arrive in the same second.
+func extractMediaInfo(msg *waProto.Message, messageID string) (mediaType string, filename string, url string, mediaKey []byte, fileSHA256 []byte, fileEncSHA256 []byte, fileLength uint64) {
 	if msg == nil {
 		return "", "", "", nil, nil, nil, 0
 	}
 
 	// Check for image message
 	if img := msg.GetImageMessage(); img != nil {
-		return "image", "image_" + time.Now().Format("20060102_150405") + ".jpg",
+		return "image", "image_" + messageID + ".jpg",
 			img.GetURL(), img.GetMediaKey(), img.GetFileSHA256(), img.GetFileEncSHA256(), img.GetFileLength()
 	}
 
 	// Check for video message
 	if vid := msg.GetVideoMessage(); vid != nil {
-		return "video", "video_" + time.Now().Format("20060102_150405") + ".mp4",
+		return "video", "video_" + messageID + ".mp4",
 			vid.GetURL(), vid.GetMediaKey(), vid.GetFileSHA256(), vid.GetFileEncSHA256(), vid.GetFileLength()
 	}
 
 	// Check for audio message
 	if aud := msg.GetAudioMessage(); aud != nil {
-		return "audio", "audio_" + time.Now().Format("20060102_150405") + ".ogg",
+		return "audio", "audio_" + messageID + ".ogg",
 			aud.GetURL(), aud.GetMediaKey(), aud.GetFileSHA256(), aud.GetFileEncSHA256(), aud.GetFileLength()
 	}
 
@@ -531,7 +532,12 @@ func extractMediaInfo(msg *waProto.Message) (mediaType string, filename string, 
 	if doc := msg.GetDocumentMessage(); doc != nil {
 		filename := doc.GetFileName()
 		if filename == "" {
-			filename = "document_" + time.Now().Format("20060102_150405")
+			filename = "document_" + messageID
+		} else {
+			// Prepend message ID to prevent collisions when same-named docs are sent
+			ext := filepath.Ext(filename)
+			base := strings.TrimSuffix(filename, ext)
+			filename = base + "_" + messageID + ext
 		}
 		return "document", filename,
 			doc.GetURL(), doc.GetMediaKey(), doc.GetFileSHA256(), doc.GetFileEncSHA256(), doc.GetFileLength()
@@ -580,7 +586,7 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	content := extractTextContent(msg.Message)
 
 	// Extract media info
-	mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength := extractMediaInfo(msg.Message)
+	mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength := extractMediaInfo(msg.Message, msg.Info.ID)
 
 	// Skip if there's no content and no media
 	if content == "" && mediaType == "" {
@@ -757,8 +763,23 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		return false, "", "", "", fmt.Errorf("failed to create chat directory: %v", err)
 	}
 
-	// Generate a local path for the file
-	localPath = fmt.Sprintf("%s/%s", chatDir, filename)
+	// Use message ID in filename to ensure uniqueness (the DB-stored filename
+	// may have collisions from messages that arrived in the same second)
+	ext := filepath.Ext(filename)
+	if ext == "" {
+		switch mediaType {
+		case "image":
+			ext = ".jpg"
+		case "video":
+			ext = ".mp4"
+		case "audio":
+			ext = ".ogg"
+		default:
+			ext = ".bin"
+		}
+	}
+	uniqueFilename := mediaType + "_" + messageID + ext
+	localPath = fmt.Sprintf("%s/%s", chatDir, uniqueFilename)
 
 	// Get absolute path
 	absPath, err := filepath.Abs(localPath)
@@ -766,10 +787,16 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		return false, "", "", "", fmt.Errorf("failed to get absolute path: %v", err)
 	}
 
-	// Check if file already exists
+	// Check if file already exists (by message-ID-based name)
 	if _, err := os.Stat(localPath); err == nil {
-		// File exists, return it
-		return true, mediaType, filename, absPath, nil
+		return true, mediaType, uniqueFilename, absPath, nil
+	}
+
+	// Also check old-style filename and rename if found
+	oldPath := fmt.Sprintf("%s/%s", chatDir, filename)
+	if _, err := os.Stat(oldPath); err == nil {
+		// Old file exists but no unique file — this is a collision victim.
+		// Don't return it, re-download to the unique path instead.
 	}
 
 	// If we don't have all the media info we need, we can't download
@@ -1203,8 +1230,8 @@ func main() {
 
 	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
 
-	// Start REST API server (port from WHATSAPP_BRIDGE_PORT, default 8080)
-	port := 8080
+	// Start REST API server (port from WHATSAPP_BRIDGE_PORT, default 8081)
+	port := 8081
 	if p := os.Getenv("WHATSAPP_BRIDGE_PORT"); p != "" {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 && n < 65536 {
 			port = n
@@ -1357,6 +1384,12 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 					continue
 				}
 
+				// Extract message ID early (needed for unique media filenames)
+				histMsgID := ""
+				if msg.Message.Key != nil && msg.Message.Key.ID != nil {
+					histMsgID = *msg.Message.Key.ID
+				}
+
 				// Extract text content
 				var content string
 				if msg.Message.Message != nil {
@@ -1369,7 +1402,7 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 				var fileLength uint64
 
 				if msg.Message.Message != nil {
-					mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength = extractMediaInfo(msg.Message.Message)
+					mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength = extractMediaInfo(msg.Message.Message, histMsgID)
 				}
 
 				// Log the message content for debugging
