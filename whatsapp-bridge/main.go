@@ -111,8 +111,18 @@ func (store *MessageStore) Close() error {
 
 // Store a chat in the database
 func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time) error {
+	// If we have a name, do a full upsert
+	if name != "" {
+		_, err := store.db.Exec(
+			"INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)",
+			jid, name, lastMessageTime,
+		)
+		return err
+	}
+	// If name is empty, only update timestamp (preserve existing name) or insert with empty name
 	_, err := store.db.Exec(
-		"INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)",
+		`INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
+		 ON CONFLICT(jid) DO UPDATE SET last_message_time = excluded.last_message_time`,
 		jid, name, lastMessageTime,
 	)
 	return err
@@ -223,6 +233,16 @@ func (store *MessageStore) GetChats() (map[string]time.Time, error) {
 	}
 
 	return chats, nil
+}
+
+// isNumericOnly returns true if the string contains only digits (i.e., it's a raw phone number or LID, not a real name)
+func isNumericOnly(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 // Extract text content from a message
@@ -572,6 +592,10 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	// Save message to database
 	chatJID := msg.Info.Chat.String()
 	sender := msg.Info.Sender.User
+	// Prefer PushName (WhatsApp display name) over raw phone/LID number
+	if msg.Info.PushName != "" {
+		sender = msg.Info.PushName
+	}
 
 	// Get appropriate chat name (pass nil for conversation since we don't have one for regular messages)
 	name := GetChatName(client, messageStore, msg.Info.Chat, chatJID, nil, sender, logger)
@@ -1099,6 +1123,89 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		})
 	})
 
+	// Handler for refreshing contact names (re-resolves LID JIDs)
+	http.HandleFunc("/api/refresh-names", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		fmt.Println("Refreshing contact names...")
+
+		// Phase 1: Collect all chats that need name resolution
+		type chatEntry struct {
+			jid  string
+			name string
+		}
+		rows, err := messageStore.db.Query("SELECT jid, name FROM chats WHERE jid LIKE '%@lid' OR name = ''")
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to query chats: %v", err), http.StatusInternalServerError)
+			return
+		}
+		var chats []chatEntry
+		for rows.Next() {
+			var c chatEntry
+			if err := rows.Scan(&c.jid, &c.name); err != nil {
+				continue
+			}
+			chats = append(chats, c)
+		}
+		rows.Close()
+
+		// Phase 2: Resolve names and update DB (no open cursor)
+		updated := 0
+		failed := 0
+		for _, c := range chats {
+			jid, err := types.ParseJID(c.jid)
+			if err != nil {
+				failed++
+				continue
+			}
+
+			if jid.Server == "g.us" {
+				continue
+			}
+
+			// Resolve LID JID to phone number JID for contact lookup
+			lookupJID := jid
+			if jid.Server == "lid" {
+				pnJID, err := client.Store.LIDs.GetPNForLID(context.Background(), jid)
+				if err == nil && !pnJID.IsEmpty() {
+					fmt.Printf("Resolved LID %s to PN %s\n", jid, pnJID)
+					lookupJID = pnJID
+				}
+			}
+
+			var name string
+			contact, err := client.Store.Contacts.GetContact(context.Background(), lookupJID)
+			if err == nil && contact.FullName != "" {
+				name = contact.FullName
+			} else if err == nil && contact.PushName != "" {
+				name = contact.PushName
+			}
+
+			if name != "" && name != c.name {
+				_, dbErr := messageStore.db.Exec("UPDATE chats SET name = ? WHERE jid = ?", name, c.jid)
+				if dbErr != nil {
+					fmt.Printf("Failed to update %s: %v\n", c.jid, dbErr)
+					failed++
+				} else {
+					fmt.Printf("Updated %s: %q -> %q\n", c.jid, c.name, name)
+					updated++
+				}
+			} else if name == "" {
+				failed++
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"updated": updated,
+			"failed":  failed,
+		})
+	})
+
 	// Start the server
 	serverAddr := fmt.Sprintf(":%d", port)
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
@@ -1318,19 +1425,35 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 		// This is an individual contact
 		logger.Infof("Getting name for contact: %s", chatJID)
 
-		// Just use contact info (full name)
-		contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
-		if err == nil && contact.FullName != "" {
-			name = contact.FullName
-		} else if sender != "" {
-			// Fallback to sender
-			name = sender
-		} else {
-			// Last fallback to JID
-			name = jid.User
+		// Resolve LID JID to phone number JID for contact lookup
+		lookupJID := jid
+		if jid.Server == "lid" {
+			pnJID, err := client.Store.LIDs.GetPNForLID(context.Background(), jid)
+			if err == nil && !pnJID.IsEmpty() {
+				logger.Infof("Resolved LID %s to PN %s", jid, pnJID)
+				lookupJID = pnJID
+			} else {
+				logger.Warnf("Failed to resolve LID %s to phone number: %v", jid, err)
+			}
 		}
 
-		logger.Infof("Using contact name: %s", name)
+		contact, err := client.Store.Contacts.GetContact(context.Background(), lookupJID)
+		if err == nil && contact.FullName != "" {
+			name = contact.FullName
+		} else if err == nil && contact.PushName != "" {
+			name = contact.PushName
+		} else if sender != "" && !isNumericOnly(sender) {
+			// Fallback to sender, but only if it's a real name (not a raw number)
+			name = sender
+		}
+		// If we still don't have a name, leave it empty so StoreChat
+		// won't overwrite a previously resolved name
+
+		if name != "" {
+			logger.Infof("Using contact name: %s", name)
+		} else {
+			logger.Warnf("Could not resolve name for contact: %s", chatJID)
+		}
 	}
 
 	return name
@@ -1356,8 +1479,16 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 			continue
 		}
 
+		// Extract PushName from the first message in the conversation (if available)
+		pushName := ""
+		if len(conversation.Messages) > 0 && conversation.Messages[0].Message != nil {
+			if pn := conversation.Messages[0].Message.PushName; pn != nil {
+				pushName = *pn
+			}
+		}
+
 		// Get appropriate chat name by passing the history sync conversation directly
-		name := GetChatName(client, messageStore, jid, chatJID, conversation, "", logger)
+		name := GetChatName(client, messageStore, jid, chatJID, conversation, pushName, logger)
 
 		// Process messages
 		messages := conversation.Messages

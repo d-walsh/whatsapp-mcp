@@ -678,7 +678,7 @@ def send_message(
         if reply_to_sender_jid:
             payload["reply_to_sender_jid"] = reply_to_sender_jid
 
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=15)
 
         if response.status_code == 200:
             result = response.json()
@@ -721,7 +721,7 @@ def send_file(
         if reply_to_sender_jid:
             payload["reply_to_sender_jid"] = reply_to_sender_jid
 
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=15)
 
         if response.status_code == 200:
             result = response.json()
@@ -770,7 +770,7 @@ def send_audio_message(
         if reply_to_sender_jid:
             payload["reply_to_sender_jid"] = reply_to_sender_jid
 
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=15)
 
         if response.status_code == 200:
             result = response.json()
@@ -868,7 +868,7 @@ def send_reaction(
         if reply_to_sender_jid:
             payload["reply_to_sender_jid"] = reply_to_sender_jid
 
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=15)
 
         if response.status_code == 200:
             result = response.json()
@@ -900,7 +900,7 @@ def download_media(message_id: str, chat_jid: str) -> tuple[Optional[str], Optio
             "chat_jid": chat_jid
         }
 
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=15)
 
         if response.status_code == 200:
             result = response.json()
