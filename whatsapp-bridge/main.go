@@ -245,6 +245,23 @@ func isNumericOnly(s string) bool {
 	return len(s) > 0
 }
 
+// normalizeChatJID normalizes a JID to its canonical LID form.
+// If the JID is a phone-based JID (@s.whatsapp.net) and a LID mapping exists,
+// returns the LID JID as the canonical form. Falls back to the original JID
+// string if no LID mapping is found (contact not yet migrated), so messages
+// are never lost.
+func normalizeChatJID(ctx context.Context, client *whatsmeow.Client, jid types.JID, logger waLog.Logger) (string, types.JID) {
+	if jid.Server == types.DefaultUserServer { // @s.whatsapp.net
+		lidJID, err := client.Store.LIDs.GetLIDForPN(ctx, jid)
+		if err == nil && !lidJID.IsEmpty() {
+			logger.Infof("Normalized phone JID %s → LID %s", jid, lidJID)
+			return lidJID.String(), lidJID
+		}
+		// No LID mapping yet — fall back to phone JID (don't lose messages)
+	}
+	return jid.String(), jid
+}
+
 // Extract text content from a message
 func extractTextContent(msg *waProto.Message) string {
 	if msg == nil {
@@ -568,13 +585,15 @@ func extractMediaInfo(msg *waProto.Message, messageID string) (mediaType string,
 
 // Handle regular incoming messages with media support
 func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *events.Message, logger waLog.Logger) {
+	// Normalize chat JID to canonical LID form (phone → LID when mapping exists)
+	chatJID, chatJIDParsed := normalizeChatJID(context.Background(), client, msg.Info.Chat, logger)
+
 	// Handle reaction messages: store reaction and do not store as normal message
 	if msg.Message != nil && msg.Message.ReactionMessage != nil {
 		rm := msg.Message.ReactionMessage
 		key := rm.GetKey()
 		if key != nil && key.GetID() != "" {
 			targetID := key.GetID()
-			chatJID := msg.Info.Chat.String()
 			reactorSender := msg.Info.Sender.User
 			if msg.Info.Sender.Server != "s.whatsapp.net" && msg.Info.Sender.Server != "" {
 				reactorSender = msg.Info.Sender.String()
@@ -590,7 +609,7 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	}
 
 	// Save message to database
-	chatJID := msg.Info.Chat.String()
+	// chatJID already normalized above (LID canonical form)
 	sender := msg.Info.Sender.User
 	// Prefer PushName (WhatsApp display name) over raw phone/LID number
 	if msg.Info.PushName != "" {
@@ -598,7 +617,7 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	}
 
 	// Get appropriate chat name (pass nil for conversation since we don't have one for regular messages)
-	name := GetChatName(client, messageStore, msg.Info.Chat, chatJID, nil, sender, logger)
+	name := GetChatName(client, messageStore, chatJIDParsed, chatJID, nil, sender, logger)
 
 	// Update chat in database with the message timestamp (keeps last message time updated)
 	err := messageStore.StoreChat(chatJID, name, msg.Info.Timestamp)
@@ -1123,6 +1142,58 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		})
 	})
 
+	// Handler for resolving JIDs between phone and LID formats
+	// GET /api/resolve-jid?jid=19179600834@s.whatsapp.net
+	// → {"lid": "115375823925399@lid", "phone": "19179600834@s.whatsapp.net"}
+	http.HandleFunc("/api/resolve-jid", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		jidStr := r.URL.Query().Get("jid")
+		if jidStr == "" {
+			http.Error(w, "jid query parameter is required", http.StatusBadRequest)
+			return
+		}
+
+		jid, err := types.ParseJID(jidStr)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Invalid JID: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		result := map[string]interface{}{}
+
+		switch jid.Server {
+		case types.DefaultUserServer: // @s.whatsapp.net — resolve to LID
+			result["phone"] = jidStr
+			lidJID, err := client.Store.LIDs.GetLIDForPN(context.Background(), jid)
+			if err == nil && !lidJID.IsEmpty() {
+				result["lid"] = lidJID.String()
+			} else {
+				result["lid"] = nil
+				result["note"] = "no LID mapping found for this phone number"
+			}
+		case "lid": // @lid — resolve to phone
+			result["lid"] = jidStr
+			pnJID, err := client.Store.LIDs.GetPNForLID(context.Background(), jid)
+			if err == nil && !pnJID.IsEmpty() {
+				result["phone"] = pnJID.String()
+			} else {
+				result["phone"] = nil
+				result["note"] = "no phone mapping found for this LID"
+			}
+		default:
+			result["jid"] = jidStr
+			result["note"] = fmt.Sprintf("unsupported JID server: %s (only @s.whatsapp.net and @lid are supported)", jid.Server)
+		}
+
+		json.NewEncoder(w).Encode(result)
+	})
+
 	// Handler for refreshing contact names (re-resolves LID JIDs)
 	http.HandleFunc("/api/refresh-names", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -1470,14 +1541,17 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 			continue
 		}
 
-		chatJID := *conversation.ID
+		rawChatJID := *conversation.ID
 
 		// Try to parse the JID
-		jid, err := types.ParseJID(chatJID)
+		rawJID, err := types.ParseJID(rawChatJID)
 		if err != nil {
-			logger.Warnf("Failed to parse JID %s: %v", chatJID, err)
+			logger.Warnf("Failed to parse JID %s: %v", rawChatJID, err)
 			continue
 		}
+
+		// Normalize phone JID → LID (canonical form); falls back if no mapping yet
+		chatJID, jid := normalizeChatJID(context.Background(), client, rawJID, logger)
 
 		// Extract PushName from the first message in the conversation (if available)
 		pushName := ""

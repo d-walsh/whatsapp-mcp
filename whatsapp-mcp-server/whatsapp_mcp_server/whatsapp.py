@@ -69,6 +69,36 @@ class Reaction:
     timestamp: datetime
 
 
+def resolve_jid_to_lid(jid: str) -> str:
+    """Resolve a phone JID (@s.whatsapp.net) to its canonical LID form (@lid).
+
+    Calls the bridge's /api/resolve-jid endpoint. If the bridge is unavailable
+    or no LID mapping exists, returns the original JID unchanged so callers
+    always have a usable JID (never lose messages).
+
+    Args:
+        jid: A JID string, e.g. "19179600834@s.whatsapp.net" or "115375823925399@lid"
+
+    Returns:
+        The canonical LID JID string if a mapping exists, otherwise the original jid.
+    """
+    if not jid or "@lid" in jid or "@g.us" in jid:
+        return jid  # Already canonical or a group — no resolution needed
+
+    try:
+        url = f"{WHATSAPP_API_BASE_URL}/resolve-jid"
+        response = requests.get(url, params={"jid": jid}, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            lid = data.get("lid")
+            if lid:
+                return lid
+    except Exception:
+        pass  # Bridge unavailable or error — fall through to original JID
+
+    return jid
+
+
 def get_sender_name(sender_jid: str) -> str:
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
@@ -194,6 +224,8 @@ def list_messages(
             params.append(sender_phone_number)
 
         if chat_jid:
+            # Resolve phone JID → LID so queries hit the canonical storage key
+            chat_jid = resolve_jid_to_lid(chat_jid)
             where_clauses.append("messages.chat_jid = ?")
             params.append(chat_jid)
 
@@ -462,13 +494,16 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
     """Get all chats involving the contact.
 
     Args:
-        jid: The contact's JID to search for
+        jid: The contact's JID to search for (phone or LID format accepted)
         limit: Maximum number of chats to return (default 20)
         page: Page number for pagination (default 0)
     """
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
+
+        # Resolve phone JID → LID for canonical DB lookup
+        jid = resolve_jid_to_lid(jid)
 
         cursor.execute("""
             SELECT DISTINCT
@@ -514,6 +549,9 @@ def get_last_interaction(jid: str) -> str:
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
+
+        # Resolve phone JID → LID for canonical DB lookup
+        jid = resolve_jid_to_lid(jid)
 
         cursor.execute("""
             SELECT
@@ -563,6 +601,9 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
+
+        # Resolve phone JID → LID for canonical DB lookup
+        chat_jid = resolve_jid_to_lid(chat_jid)
 
         query = """
             SELECT
