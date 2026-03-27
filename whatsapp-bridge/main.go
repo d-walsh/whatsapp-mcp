@@ -316,7 +316,14 @@ func buildReplyContextInfo(replyToMessageId, replyToSenderJid string) *waProto.C
 // Function to send a WhatsApp message
 func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message string, mediaPath string, replyToMessageId string, replyToSenderJid string) (bool, string) {
 	if !client.IsConnected() {
-		return false, "Not connected to WhatsApp"
+		// Try to reconnect before giving up
+		if err := client.Connect(); err != nil {
+			return false, fmt.Sprintf("Not connected to WhatsApp and reconnect failed: %v", err)
+		}
+		time.Sleep(3 * time.Second)
+		if !client.IsConnected() {
+			return false, "Not connected to WhatsApp (reconnect attempt timed out)"
+		}
 	}
 
 	// Create JID for recipient
@@ -510,7 +517,13 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 // sendReaction sends a reaction (emoji) to a message, or removes reaction if reaction is empty
 func sendReaction(client *whatsmeow.Client, chatJID, messageID, reaction, replyToSenderJID string) (bool, string) {
 	if !client.IsConnected() {
-		return false, "Not connected to WhatsApp"
+		if err := client.Connect(); err != nil {
+			return false, fmt.Sprintf("Not connected to WhatsApp and reconnect failed: %v", err)
+		}
+		time.Sleep(3 * time.Second)
+		if !client.IsConnected() {
+			return false, "Not connected to WhatsApp (reconnect attempt timed out)"
+		}
 	}
 
 	chatParsed, err := types.ParseJID(chatJID)
@@ -1350,6 +1363,18 @@ func main() {
 
 		case *events.Connected:
 			logger.Infof("Connected to WhatsApp")
+
+		case *events.Disconnected:
+			logger.Warnf("Disconnected from WhatsApp, will attempt reconnect in 5s...")
+			go func() {
+				time.Sleep(5 * time.Second)
+				if !client.IsConnected() {
+					logger.Infof("Attempting reconnect...")
+					if err := client.Connect(); err != nil {
+						logger.Errorf("Reconnect failed: %v", err)
+					}
+				}
+			}()
 
 		case *events.LoggedOut:
 			logger.Warnf("Device logged out, please scan QR code to log in again")
